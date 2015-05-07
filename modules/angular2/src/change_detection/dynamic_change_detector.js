@@ -1,22 +1,24 @@
 import {isPresent, isBlank, BaseException, FunctionWrapper} from 'angular2/src/facade/lang';
 import {List, ListWrapper, MapWrapper, StringMapWrapper} from 'angular2/src/facade/collection';
-import {ContextWithVariableBindings} from './parser/context_with_variable_bindings';
 
 import {AbstractChangeDetector} from './abstract_change_detector';
+import {BindingRecord} from './binding_record';
 import {PipeRegistry} from './pipes/pipe_registry';
-import {ChangeDetectionUtil, SimpleChange, uninitialized} from './change_detection_util';
+import {ChangeDetectionUtil, uninitialized} from './change_detection_util';
 
 
 import {
   ProtoRecord,
   RECORD_TYPE_SELF,
   RECORD_TYPE_PROPERTY,
+  RECORD_TYPE_LOCAL,
   RECORD_TYPE_INVOKE_METHOD,
   RECORD_TYPE_CONST,
   RECORD_TYPE_INVOKE_CLOSURE,
   RECORD_TYPE_PRIMITIVE_OP,
   RECORD_TYPE_KEYED_ACCESS,
   RECORD_TYPE_PIPE,
+  RECORD_TYPE_BINDING_PIPE,
   RECORD_TYPE_INTERPOLATE
   } from './proto_record';
 
@@ -26,14 +28,19 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
   dispatcher:any;
   pipeRegistry;
 
+  locals:any;
   values:List;
   changes:List;
   pipes:List;
   prevContexts:List;
 
   protos:List<ProtoRecord>;
+  directives:any;
+  directiveRecords:List;
+  changeControlStrategy:string;
 
-  constructor(dispatcher:any, pipeRegistry:PipeRegistry, protoRecords:List<ProtoRecord>) {
+  constructor(changeControlStrategy:string, dispatcher:any, pipeRegistry:PipeRegistry,
+              protoRecords:List<ProtoRecord>, directiveRecords:List) {
     super();
     this.dispatcher = dispatcher;
     this.pipeRegistry = pipeRegistry;
@@ -47,12 +54,19 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
     ListWrapper.fill(this.pipes, null);
     ListWrapper.fill(this.prevContexts, uninitialized);
     ListWrapper.fill(this.changes, false);
+    this.locals = null;
+    this.directives = null;
 
     this.protos = protoRecords;
+    this.directiveRecords = directiveRecords;
+    this.changeControlStrategy = changeControlStrategy;
   }
 
-  hydrate(context:any) {
+  hydrate(context:any, locals:any, directives:any) {
+    this.mode = ChangeDetectionUtil.changeDetectionMode(this.changeControlStrategy);
     this.values[0] = context;
+    this.locals = locals;
+    this.directives = directives;
   }
 
   dehydrate() {
@@ -61,6 +75,7 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
     ListWrapper.fill(this.changes, false);
     ListWrapper.fill(this.pipes, null);
     ListWrapper.fill(this.prevContexts, uninitialized);
+    this.locals = null;
   }
 
   _destroyPipes() {
@@ -78,28 +93,74 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
   detectChangesInRecords(throwOnChange:boolean) {
     var protos:List<ProtoRecord> = this.protos;
 
-    var updatedRecords = null;
+    var changes = null;
+    var isChanged = false;
     for (var i = 0; i < protos.length; ++i) {
       var proto:ProtoRecord = protos[i];
-      var change = this._check(proto);
+      var bindingRecord = proto.bindingRecord;
+      var directiveRecord = bindingRecord.directiveRecord;
 
+      var change = this._check(proto);
       if (isPresent(change)) {
-        var record = ChangeDetectionUtil.changeRecord(proto.bindingMemento, change);
-        updatedRecords = ChangeDetectionUtil.addRecord(updatedRecords, record);
+        if (throwOnChange) ChangeDetectionUtil.throwOnChange(proto, change);
+        this._updateDirectiveOrElement(change, bindingRecord);
+        isChanged = true;
+        changes = this._addChange(bindingRecord, change, changes);
       }
 
-      if (proto.lastInDirective && isPresent(updatedRecords)) {
-        if (throwOnChange) ChangeDetectionUtil.throwOnChange(proto, updatedRecords[0]);
+      if (proto.lastInDirective) {
+        if (isPresent(changes)) {
+          this._getDirectiveFor(directiveRecord.directiveIndex).onChange(changes);
+          changes = null;
+        }
 
-        this.dispatcher.onRecordChange(proto.directiveMemento, updatedRecords);
-        updatedRecords = null;
+        if (isChanged && bindingRecord.isOnPushChangeDetection()) {
+          this._getDetectorFor(directiveRecord.directiveIndex).markAsCheckOnce();
+        }
+
+        isChanged = false;
       }
     }
   }
 
+  callOnAllChangesDone() {
+    var dirs = this.directiveRecords;
+    for (var i = dirs.length - 1; i >= 0; --i) {
+      var dir = dirs[i];
+      if (dir.callOnAllChangesDone) {
+        this._getDirectiveFor(dir.directiveIndex).onAllChangesDone();
+      }
+    }
+  }
+
+  _updateDirectiveOrElement(change, bindingRecord) {
+    if (isBlank(bindingRecord.directiveRecord)) {
+      this.dispatcher.notifyOnBinding(bindingRecord, change.currentValue);
+    } else {
+      var directiveIndex = bindingRecord.directiveRecord.directiveIndex;
+      bindingRecord.setter(this._getDirectiveFor(directiveIndex), change.currentValue);
+    }
+  }
+
+  _addChange(bindingRecord:BindingRecord, change, changes) {
+    if (bindingRecord.callOnChange()) {
+      return ChangeDetectionUtil.addChange(changes, bindingRecord.propertyName, change);
+    } else {
+      return changes;
+    }
+  }
+
+  _getDirectiveFor(directiveIndex) {
+    return this.directives.getDirectiveFor(directiveIndex);
+  }
+
+  _getDetectorFor(directiveIndex) {
+    return this.directives.getDetectorFor(directiveIndex);
+  }
+
   _check(proto:ProtoRecord) {
     try {
-      if (proto.mode == RECORD_TYPE_PIPE) {
+      if (proto.mode === RECORD_TYPE_PIPE || proto.mode === RECORD_TYPE_BINDING_PIPE) {
         return this._pipeCheck(proto);
       } else {
         return this._referenceCheck(proto);
@@ -143,26 +204,15 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
 
       case RECORD_TYPE_PROPERTY:
         var context = this._readContext(proto);
-        var c = ChangeDetectionUtil.findContext(proto.name, context);
-        if (c instanceof ContextWithVariableBindings) {
-          return c.get(proto.name);
-        } else {
-          var propertyGetter:Function = proto.funcOrValue;
-          return propertyGetter(c);
-        }
-        break;
+        return proto.funcOrValue(context);
+
+      case RECORD_TYPE_LOCAL:
+        return this.locals.get(proto.name);
 
       case RECORD_TYPE_INVOKE_METHOD:
         var context = this._readContext(proto);
         var args = this._readArgs(proto);
-        var c = ChangeDetectionUtil.findContext(proto.name, context);
-        if (c instanceof ContextWithVariableBindings) {
-          return FunctionWrapper.apply(c.get(proto.name), args);
-        } else {
-          var methodInvoker:Function = proto.funcOrValue;
-          return methodInvoker(c, args);
-        }
-        break;
+        return proto.funcOrValue(context, args);
 
       case RECORD_TYPE_KEYED_ACCESS:
         var arg = this._readArgs(proto)[0];
@@ -183,10 +233,13 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
   _pipeCheck(proto:ProtoRecord) {
     var context = this._readContext(proto);
     var pipe = this._pipeFor(proto, context);
+    var prevValue = this._readSelf(proto);
 
     var newValue = pipe.transform(context);
-    if (! ChangeDetectionUtil.noChangeMarker(newValue)) {
-      var prevValue = this._readSelf(proto);
+
+    if (!isSame(prevValue, newValue)) {
+      newValue = ChangeDetectionUtil.unwrapValue(newValue);
+
       this._writeSelf(proto, newValue);
       this._setChanged(proto, true);
 
@@ -209,12 +262,25 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
     if (isPresent(storedPipe)) {
       storedPipe.onDestroy();
     }
-    var pipe = this.pipeRegistry.get(proto.name, context);
+
+    // Currently, only pipes that used in bindings in the template get
+    // the changeDetectorRef of the encompassing component.
+    //
+    // In the future, pipes declared in the bind configuration should
+    // be able to access the changeDetectorRef of that component.
+    var cdr = proto.mode === RECORD_TYPE_BINDING_PIPE ? this.ref : null;
+    var pipe = this.pipeRegistry.get(proto.name, context, cdr);
     this._writePipe(proto, pipe);
     return pipe;
   }
 
   _readContext(proto:ProtoRecord) {
+    if (proto.contextIndex == -1) {
+      return this._getDirectiveFor(proto.directiveIndex);
+    } else {
+      return this.values[proto.contextIndex];
+    }
+
     return this.values[proto.contextIndex];
   }
 
@@ -262,11 +328,12 @@ export class DynamicChangeDetector extends AbstractChangeDetector {
   }
 }
 
-var _singleElementList = [null];
-
 function isSame(a, b) {
   if (a === b) return true;
   if (a instanceof String && b instanceof String && a == b) return true;
   if ((a !== a) && (b !== b)) return true;
   return false;
 }
+
+
+

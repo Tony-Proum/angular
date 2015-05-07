@@ -1,16 +1,27 @@
-import {isBlank} from 'angular2/src/facade/lang';
-import {Pipe, NO_CHANGE} from './pipe';
+import {isBlank, CONST} from 'angular2/src/facade/lang';
+import {Pipe, WrappedValue, PipeFactory} from './pipe';
 
-export class NullPipeFactory {
+/**
+ * @exportedAs angular2/pipes
+ */
+export class NullPipeFactory extends PipeFactory {
+  @CONST()
+  constructor() {
+    super();
+  }
+
   supports(obj):boolean {
     return NullPipe.supportsObj(obj);
   }
 
-  create():Pipe {
+  create(cdRef):Pipe {
     return new NullPipe();
   }
 }
 
+/**
+ * @exportedAs angular2/pipes
+ */
 export class NullPipe extends Pipe {
   called:boolean;
   constructor() {
@@ -29,9 +40,9 @@ export class NullPipe extends Pipe {
   transform(value) {
     if (! this.called) {
       this.called = true;
-      return null;
+      return WrappedValue.wrap(null);
     } else {
-      return NO_CHANGE;
+      return null;
     }
   }
 }

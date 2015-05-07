@@ -10,11 +10,6 @@ class Math {
   static double random() => _random.nextDouble();
 }
 
-class FIELD {
-  final String definition;
-  const FIELD(this.definition);
-}
-
 class CONST {
   const CONST();
 }
@@ -29,6 +24,8 @@ class IMPLEMENTS {
 bool isPresent(obj) => obj != null;
 bool isBlank(obj) => obj == null;
 bool isString(obj) => obj is String;
+bool isFunction(obj) => obj is Function;
+bool isType(obj) => obj is Type;
 
 String stringify(obj) => obj.toString();
 
@@ -164,7 +161,7 @@ class FunctionWrapper {
 class BaseException extends Error {
   final String message;
 
-  BaseException(this.message);
+  BaseException([this.message]);
 
   String toString() {
     return this.message;
@@ -220,3 +217,6 @@ class DateWrapper {
     return date.toUtc().toIso8601String();
   }
 }
+
+// needed to match the exports from lang.js
+var global = null;

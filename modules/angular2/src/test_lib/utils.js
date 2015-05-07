@@ -9,24 +9,29 @@ export class Log {
     this._result = [];
   }
 
-  add(value) {
+  add(value):void {
     ListWrapper.push(this._result, value);
   }
 
   fn(value) {
-    return () => {
+    return (a1 = null, a2 = null, a3 = null, a4 = null, a5 = null) => {
       ListWrapper.push(this._result, value);
     }
   }
 
-  result() {
+  result():string {
     return ListWrapper.join(this._result, "; ");
   }
 }
 
-export function queryView(view, selector) {
-  for (var i = 0; i < view.nodes.length; ++i) {
-    var res = DOM.querySelector(view.nodes[i], selector);
+export function viewRootNodes(view):List {
+  return view.render.delegate.rootNodes;
+}
+
+export function queryView(view, selector:string) {
+  var rootNodes = viewRootNodes(view);
+  for (var i = 0; i < rootNodes.length; ++i) {
+    var res = DOM.querySelector(rootNodes[i], selector);
     if (isPresent(res)) {
       return res;
     }
@@ -38,6 +43,6 @@ export function dispatchEvent(element, eventType) {
   DOM.dispatchEvent(element, DOM.createEvent(eventType));
 }
 
-export function el(html) {
+export function el(html:string) {
   return DOM.firstChild(DOM.content(DOM.createTemplate(html)));
 }

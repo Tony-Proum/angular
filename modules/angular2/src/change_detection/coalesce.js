@@ -45,9 +45,9 @@ function _selfRecord(r:ProtoRecord, contextIndex:number, selfIndex:number):Proto
     [],
     r.fixedArgs,
     contextIndex,
+    r.directiveIndex,
     selfIndex,
-    r.bindingMemento,
-    r.directiveMemento,
+    r.bindingRecord,
     r.expressionAsString,
     r.lastInBinding,
     r.lastInDirective
@@ -73,9 +73,9 @@ function _replaceIndices(r:ProtoRecord, selfIndex:number, indexMap:Map) {
     args,
     r.fixedArgs,
     contextIndex,
+    r.directiveIndex,
     selfIndex,
-    r.bindingMemento,
-    r.directiveMemento,
+    r.bindingRecord,
     r.expressionAsString,
     r.lastInBinding,
     r.lastInDirective

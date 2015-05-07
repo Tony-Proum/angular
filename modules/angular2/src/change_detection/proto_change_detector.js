@@ -22,11 +22,13 @@ import {
   PrefixNot
   } from './parser/ast';
 
-import {ChangeRecord, ChangeDispatcher, ChangeDetector} from './interfaces';
+import {ChangeDispatcher, ChangeDetector, ProtoChangeDetector} from './interfaces';
 import {ChangeDetectionUtil} from './change_detection_util';
 import {DynamicChangeDetector} from './dynamic_change_detector';
 import {ChangeDetectorJITGenerator} from './change_detection_jit_generator';
 import {PipeRegistry} from './pipes/pipe_registry';
+import {BindingRecord} from './binding_record';
+import {DirectiveRecord, DirectiveIndex} from './directive_record';
 
 import {coalesce} from './coalesce';
 
@@ -34,47 +36,47 @@ import {
   ProtoRecord,
   RECORD_TYPE_SELF,
   RECORD_TYPE_PROPERTY,
+  RECORD_TYPE_LOCAL,
   RECORD_TYPE_INVOKE_METHOD,
   RECORD_TYPE_CONST,
   RECORD_TYPE_INVOKE_CLOSURE,
   RECORD_TYPE_PRIMITIVE_OP,
   RECORD_TYPE_KEYED_ACCESS,
   RECORD_TYPE_PIPE,
+  RECORD_TYPE_BINDING_PIPE,
   RECORD_TYPE_INTERPOLATE
   } from './proto_record';
 
-export class ProtoChangeDetector  {
-  addAst(ast:AST, bindingMemento:any, directiveMemento:any = null){}
-  instantiate(dispatcher:any):ChangeDetector{
-    return null;
-  }
-}
-
 export class DynamicProtoChangeDetector extends ProtoChangeDetector {
-  _records:List<ProtoRecord>;
-  _recordBuilder:ProtoRecordBuilder;
   _pipeRegistry:PipeRegistry;
+  _records:List<ProtoRecord>;
+  _bindingRecords:List<BindingRecord>;
+  _variableBindings:List<string>;
+  _directiveRecords:List<DirectiveRecord>;
+  _changeControlStrategy:string;
 
-  constructor(pipeRegistry:PipeRegistry) {
+  constructor(pipeRegistry:PipeRegistry, bindingRecords:List, variableBindings:List, directiveRecords:List, changeControlStrategy:string) {
     super();
     this._pipeRegistry = pipeRegistry;
-    this._records = null;
-    this._recordBuilder = new ProtoRecordBuilder();
-  }
-
-  addAst(ast:AST, bindingMemento:any, directiveMemento:any = null) {
-    this._recordBuilder.addAst(ast, bindingMemento, directiveMemento);
+    this._bindingRecords = bindingRecords;
+    this._variableBindings = variableBindings;
+    this._directiveRecords = directiveRecords;
+    this._changeControlStrategy = changeControlStrategy;
   }
 
   instantiate(dispatcher:any) {
     this._createRecordsIfNecessary();
-    return new DynamicChangeDetector(dispatcher, this._pipeRegistry, this._records);
+    return new DynamicChangeDetector(this._changeControlStrategy, dispatcher,
+      this._pipeRegistry, this._records, this._directiveRecords);
   }
 
   _createRecordsIfNecessary() {
     if (isBlank(this._records)) {
-      var records = this._recordBuilder.records;
-      this._records = coalesce(records);
+      var recordBuilder = new ProtoRecordBuilder();
+      ListWrapper.forEach(this._bindingRecords, (b) => {
+        recordBuilder.addAst(b, this._variableBindings);
+      });
+      this._records = coalesce(recordBuilder.records);
     }
   }
 }
@@ -82,18 +84,20 @@ export class DynamicProtoChangeDetector extends ProtoChangeDetector {
 var _jitProtoChangeDetectorClassCounter:number = 0;
 export class JitProtoChangeDetector extends ProtoChangeDetector {
   _factory:Function;
-  _recordBuilder:ProtoRecordBuilder;
   _pipeRegistry;
+  _bindingRecords:List<BindingRecord>;
+  _variableBindings:List<string>;
+  _directiveRecords:List<DirectiveRecord>;
+  _changeControlStrategy:string;
 
-  constructor(pipeRegistry) {
+  constructor(pipeRegistry, bindingRecords:List, variableBindings:List, directiveRecords:List, changeControlStrategy:string) {
     super();
     this._pipeRegistry = pipeRegistry;
     this._factory = null;
-    this._recordBuilder = new ProtoRecordBuilder();
-  }
-
-  addAst(ast:AST, bindingMemento:any, directiveMemento:any = null) {
-    this._recordBuilder.addAst(ast, bindingMemento, directiveMemento);
+    this._bindingRecords = bindingRecords;
+    this._variableBindings = variableBindings;
+    this._directiveRecords = directiveRecords;
+    this._changeControlStrategy = changeControlStrategy;
   }
 
   instantiate(dispatcher:any) {
@@ -103,10 +107,15 @@ export class JitProtoChangeDetector extends ProtoChangeDetector {
 
   _createFactoryIfNecessary() {
     if (isBlank(this._factory)) {
+      var recordBuilder = new ProtoRecordBuilder();
+      ListWrapper.forEach(this._bindingRecords, (b) => {
+        recordBuilder.addAst(b, this._variableBindings);
+      });
       var c = _jitProtoChangeDetectorClassCounter++;
-      var records = coalesce(this._recordBuilder.records);
+      var records = coalesce(recordBuilder.records);
       var typeName = `ChangeDetector${c}`;
-      this._factory = new ChangeDetectorJITGenerator(typeName, records).generate();
+      this._factory = new ChangeDetectorJITGenerator(typeName, this._changeControlStrategy, records,
+        this._directiveRecords).generate();
     }
   }
 }
@@ -118,13 +127,13 @@ class ProtoRecordBuilder {
     this.records = [];
   }
 
-  addAst(ast:AST, bindingMemento:any, directiveMemento:any = null) {
+  addAst(b:BindingRecord, variableBindings:List = null) {
     var last = ListWrapper.last(this.records);
-    if (isPresent(last) && last.directiveMemento == directiveMemento) {
+    if (isPresent(last) && last.bindingRecord.directiveRecord == b.directiveRecord) {
       last.lastInDirective = false;
     }
 
-    var pr = _ConvertAstIntoProtoRecords.convert(ast, bindingMemento, directiveMemento, this.records.length);
+    var pr = _ConvertAstIntoProtoRecords.convert(b, this.records.length, variableBindings);
     if (! ListWrapper.isEmpty(pr)) {
       var last = ListWrapper.last(pr);
       last.lastInBinding = true;
@@ -137,27 +146,27 @@ class ProtoRecordBuilder {
 
 class _ConvertAstIntoProtoRecords {
   protoRecords:List;
-  bindingMemento:any;
-  directiveMemento:any;
+  bindingRecord:BindingRecord;
+  variableBindings:List;
   contextIndex:number;
   expressionAsString:string;
 
-  constructor(bindingMemento:any, directiveMemento:any, contextIndex:number, expressionAsString:string) {
+  constructor(bindingRecord:BindingRecord, contextIndex:number, expressionAsString:string, variableBindings:List) {
     this.protoRecords = [];
-    this.bindingMemento = bindingMemento;
-    this.directiveMemento = directiveMemento;
+    this.bindingRecord = bindingRecord;
     this.contextIndex = contextIndex;
     this.expressionAsString = expressionAsString;
+    this.variableBindings = variableBindings;
   }
 
-  static convert(ast:AST, bindingMemento:any, directiveMemento:any, contextIndex:number) {
-    var c = new _ConvertAstIntoProtoRecords(bindingMemento, directiveMemento, contextIndex, ast.toString());
-    ast.visit(c);
+  static convert(b:BindingRecord, contextIndex:number, variableBindings:List) {
+    var c = new _ConvertAstIntoProtoRecords(b, contextIndex, b.ast.toString(), variableBindings);
+    b.ast.visit(c);
     return c.protoRecords;
   }
 
   visitImplicitReceiver(ast:ImplicitReceiver) {
-    return 0;
+    return this.bindingRecord.implicitReceiver;
   }
 
   visitInterpolation(ast:Interpolation) {
@@ -172,13 +181,24 @@ class _ConvertAstIntoProtoRecords {
 
   visitAccessMember(ast:AccessMember) {
     var receiver = ast.receiver.visit(this);
-    return this._addRecord(RECORD_TYPE_PROPERTY, ast.name, ast.getter, [], null, receiver);
+    if (isPresent(this.variableBindings) && 
+        ListWrapper.contains(this.variableBindings, ast.name) && 
+        ast.receiver instanceof ImplicitReceiver) {
+      return this._addRecord(RECORD_TYPE_LOCAL, ast.name, ast.name, [], null, receiver);
+    } else {
+      return this._addRecord(RECORD_TYPE_PROPERTY, ast.name, ast.getter, [], null, receiver);
+    }
   }
 
-  visitMethodCall(ast:MethodCall) {
+  visitMethodCall(ast:MethodCall) {;
     var receiver = ast.receiver.visit(this);
     var args = this._visitAll(ast.args);
-    return this._addRecord(RECORD_TYPE_INVOKE_METHOD, ast.name, ast.fn, args, null, receiver);
+    if (isPresent(this.variableBindings) && ListWrapper.contains(this.variableBindings, ast.name)) {
+      var target = this._addRecord(RECORD_TYPE_LOCAL, ast.name, ast.name, [], null, receiver);
+      return this._addRecord(RECORD_TYPE_INVOKE_CLOSURE, "closure", null, args, null, target);
+    } else {
+      return this._addRecord(RECORD_TYPE_INVOKE_METHOD, ast.name, ast.fn, args, null, receiver);
+    }
   }
 
   visitFunctionCall(ast:FunctionCall) {
@@ -221,7 +241,8 @@ class _ConvertAstIntoProtoRecords {
 
   visitPipe(ast:Pipe) {
     var value = ast.exp.visit(this);
-    return this._addRecord(RECORD_TYPE_PIPE, ast.name, ast.name, [], null, value);
+    var type = ast.inBinding ? RECORD_TYPE_BINDING_PIPE : RECORD_TYPE_PIPE;
+    return this._addRecord(type, ast.name, ast.name, [], null, value);
   }
 
   visitKeyedAccess(ast:KeyedAccess) {
@@ -241,9 +262,15 @@ class _ConvertAstIntoProtoRecords {
 
   _addRecord(type, name, funcOrValue, args, fixedArgs, context) {
     var selfIndex = ++ this.contextIndex;
-    ListWrapper.push(this.protoRecords,
-      new ProtoRecord(type, name, funcOrValue, args, fixedArgs, context, selfIndex,
-        this.bindingMemento, this.directiveMemento, this.expressionAsString, false, false));
+    if (context instanceof DirectiveIndex) {
+      ListWrapper.push(this.protoRecords,
+        new ProtoRecord(type, name, funcOrValue, args, fixedArgs, -1, context, selfIndex,
+          this.bindingRecord, this.expressionAsString, false, false));
+    } else {
+      ListWrapper.push(this.protoRecords,
+        new ProtoRecord(type, name, funcOrValue, args, fixedArgs, context, null, selfIndex,
+          this.bindingRecord, this.expressionAsString, false, false));
+    }
     return selfIndex;
   }
 }

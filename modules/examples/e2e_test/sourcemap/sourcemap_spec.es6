@@ -6,6 +6,9 @@ describe('sourcemaps', function () {
 
   it('should map sources', function() {
     browser.get(URL);
+
+    $('error-app .errorButton').click();
+
     // TODO(tbosch): Bug in ChromeDriver: Need to execute at least one command
     // so that the browser logs can be read out!
     browser.executeScript('1+1');
@@ -13,7 +16,7 @@ describe('sourcemaps', function () {
       var errorLine = null;
       var errorColumn = null;
       logs.forEach(function(log) {
-        var match = /Test\.run\s+\(.+:(\d+):(\d+)/m.exec(log.message);
+        var match = /\.createError\s+\(.+:(\d+):(\d+)/m.exec(log.message);
         if (match) {
           errorLine = parseInt(match[1]);
           errorColumn = parseInt(match[2]);
@@ -22,6 +25,7 @@ describe('sourcemaps', function () {
 
       expect(errorLine).not.toBeNull();
       expect(errorColumn).not.toBeNull();
+
 
       var sourceMapData = fs.readFileSync(
           'dist/js/prod/es5/examples/src/sourcemap/index.js.map');
@@ -32,9 +36,15 @@ describe('sourcemaps', function () {
         column: errorColumn
       });
 
+      var finalMapData = fs.readFileSync(
+          'dist/js/prod/es6/examples/src/sourcemap/index.map');
+      var finalDecoder = new sourceMap.SourceMapConsumer(JSON.parse(finalMapData));
+
+      var finalPosition = finalDecoder.originalPositionFor(originalPosition);
+
       var sourceCodeLines = fs.readFileSync('modules/examples/src/sourcemap/index.js',
           {encoding: 'UTF-8'}).split('\n');
-      expect(sourceCodeLines[originalPosition.line - 1])
+      expect(sourceCodeLines[finalPosition.line - 1])
           .toMatch(/throw new BaseException\(\'Sourcemap test\'\)/);
     });
   });

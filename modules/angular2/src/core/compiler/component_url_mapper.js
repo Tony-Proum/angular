@@ -1,6 +1,8 @@
+import {Injectable} from 'angular2/src/di/annotations_impl';
 import {Type, isPresent} from 'angular2/src/facade/lang';
 import {Map, MapWrapper} from 'angular2/src/facade/collection';
 
+@Injectable()
 export class ComponentUrlMapper {
   // Returns the base URL to the component source file.
   // The returned URL could be:

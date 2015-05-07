@@ -1,16 +1,70 @@
 library test_lib.test_lib;
 
 import 'package:guinness/guinness.dart' as gns;
-export 'package:guinness/guinness.dart' hide Expect, expect, NotExpect, beforeEach, it, iit;
+export 'package:guinness/guinness.dart' hide Expect, expect, NotExpect, beforeEach, it, iit, xit;
 import 'package:unittest/unittest.dart' hide expect;
-import 'dart:mirrors';
+
 import 'dart:async';
-import 'package:angular2/src/reflection/reflection.dart';
-import 'package:angular2/src/reflection/reflection_capabilities.dart';
-import 'package:collection/equality.dart';
+
 import 'package:angular2/src/dom/dom_adapter.dart' show DOM;
 
+import 'package:angular2/src/reflection/reflection.dart';
+import 'package:angular2/src/reflection/reflection_capabilities.dart';
+
+import 'package:angular2/src/di/binding.dart' show bind;
+import 'package:angular2/src/di/injector.dart' show Injector;
+import 'package:angular2/src/facade/collection.dart' show StringMapWrapper;
+
+import './test_injector.dart';
+export './test_injector.dart' show inject;
+
 bool IS_DARTIUM = true;
+
+List _testBindings = [];
+Injector _injector;
+bool _isCurrentTestAsync;
+bool _inIt = false;
+
+class AsyncTestCompleter {
+  final _completer = new Completer();
+
+  void done() {
+    _completer.complete();
+  }
+
+  Future get future => _completer.future;
+}
+
+void testSetup() {
+  reflector.reflectionCapabilities = new ReflectionCapabilities();
+  // beforeEach configuration:
+  // - Priority 3: clear the bindings before each test,
+  // - Priority 2: collect the bindings before each test, see beforeEachBindings(),
+  // - Priority 1: create the test injector to be used in beforeEach() and it()
+
+  gns.beforeEach(
+      () {
+        _testBindings.clear();
+      },
+      priority: 3
+  );
+
+  var completerBinding = bind(AsyncTestCompleter).toFactory(() {
+    // Mark the test as async when an AsyncTestCompleter is injected in an it(),
+    if (!_inIt) throw 'AsyncTestCompleter can only be injected in an "it()"';
+    _isCurrentTestAsync = true;
+    return new AsyncTestCompleter();
+  });
+
+  gns.beforeEach(
+      () {
+        _isCurrentTestAsync = false;
+        _testBindings.add(completerBinding);
+        _injector = createTestInjector(_testBindings);
+      },
+      priority: 1
+  );
+}
 
 Expect expect(actual, [matcher]) {
   final expect = new Expect(actual);
@@ -18,126 +72,140 @@ Expect expect(actual, [matcher]) {
   return expect;
 }
 
+const _u = null;
+
 class Expect extends gns.Expect {
   Expect(actual) : super(actual);
 
   NotExpect get not => new NotExpect(actual);
 
-  // TODO(tbosch) change back when https://github.com/vsavkin/guinness/issues/41 is fixed
-  // void toEqual(expected) => toHaveSameProps(expected);
-  void toEqual(expected) => _expect(actual, new FixedSamePropsMatcher(expected));
-  void toThrowError([message=""]) => this.toThrowWith(message: message);
+  void toEqual(expected) => toHaveSameProps(expected);
+  void toThrowError([message=""]) => toThrowWith(message: message);
   void toBePromise() => _expect(actual is Future, equals(true));
   void toImplement(expected) => toBeA(expected);
   void toBeNaN() => _expect(double.NAN.compareTo(actual) == 0, equals(true));
   void toHaveText(expected) => _expect(elementText(actual), expected);
+  void toHaveBeenCalledWith([a = _u, b = _u, c = _u, d = _u, e = _u, f = _u]) =>
+      _expect(_argsMatch(actual, a, b, c, d, e, f), true, reason: 'method invoked with correct arguments');
   Function get _expect => gns.guinness.matchers.expect;
+
+  // TODO(tbosch): move this hack into Guinness
+  _argsMatch(spyFn, [a0 = _u, a1 = _u, a2 = _u, a3 = _u, a4 = _u, a5 = _u]) {
+    var calls = spyFn.calls;
+    final toMatch = _takeDefined([a0, a1, a2, a3, a4, a5]);
+    if (calls.isEmpty) {
+      return false;
+    } else {
+      gns.SamePropsMatcher matcher = new gns.SamePropsMatcher(toMatch);
+      for (var i=0; i<calls.length; i++) {
+        var call = calls[i];
+        // TODO: create a better error message, not just 'Expected: <true> Actual: <false>'.
+        // For hacking this is good:
+        // print(call.positionalArguments);
+        if (matcher.matches(call.positionalArguments, null)) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+
+  List _takeDefined(List iter) => iter.takeWhile((_) => _ != _u).toList();
 }
 
 class NotExpect extends gns.NotExpect {
   NotExpect(actual) : super(actual);
 
-  // TODO(tbosch) change back when https://github.com/vsavkin/guinness/issues/41 is fixed
-  // void toEqual(expected) => toHaveSameProps(expected);
-  void toEqual(expected) => _expect(actual, isNot(new FixedSamePropsMatcher(expected)));
+  void toEqual(expected) => toHaveSameProps(expected);
   void toBePromise() => _expect(actual is Future, equals(false));
   Function get _expect => gns.guinness.matchers.expect;
 }
 
-beforeEach(fn) {
-  gns.beforeEach(_enableReflection(fn));
+void beforeEach(fn) {
+  if (fn is! FunctionWithParamTokens) fn = new FunctionWithParamTokens([], fn);
+  gns.beforeEach(() {
+    fn.execute(_injector);
+  });
 }
 
-it(name, fn) {
-  gns.it(name, _enableReflection(_handleAsync(fn)));
+/**
+ * Allows overriding default bindings defined in test_injector.js.
+ *
+ * The given function must return a list of DI bindings.
+ *
+ * Example:
+ *
+ *   beforeEachBindings(() => [
+ *     bind(Compiler).toClass(MockCompiler),
+ *     bind(SomeToken).toValue(myValue),
+ *   ]);
+ */
+void beforeEachBindings(Function fn) {
+  gns.beforeEach(
+      () {
+        var bindings = fn();
+        if (bindings != null) _testBindings.addAll(bindings);
+      },
+      priority: 2
+  );
 }
 
-iit(name, fn) {
-  gns.iit(name, _enableReflection(_handleAsync(fn)));
+void _it(gnsFn, name, fn) {
+  if (fn is! FunctionWithParamTokens) fn = new FunctionWithParamTokens([], fn);
+  gnsFn(name, () {
+    _inIt = true;
+    fn.execute(_injector);
+    _inIt = false;
+    if (_isCurrentTestAsync) return _injector.get(AsyncTestCompleter).future;
+  });
 }
 
-_enableReflection(fn) {
-  return () {
-    reflector.reflectionCapabilities = new ReflectionCapabilities();
-    return fn();
-  };
+
+void it(name, fn) {
+  _it(gns.it, name, fn);
 }
 
-_handleAsync(fn) {
-  ClosureMirror cm = reflect(fn);
-  MethodMirror mm = cm.function;
+void iit(name, fn) {
+  _it(gns.iit, name, fn);
+}
 
-  var completer = new Completer();
+void xit(name, fn) {
+  _it(gns.xit, name, fn);
+}
 
-  if (mm.parameters.length == 1) {
-    return () {
-      cm.apply([completer.complete]);
-      return completer.future;
-    };
+class SpyFunction extends gns.SpyFunction {
+  SpyFunction(String name): super(name);
+
+  // TODO: vsavkin move to guinness
+  andReturn(value) {
+    return andCallFake(([a0, a1, a2, a3, a4, a5]) => value);
   }
-
-  return fn;
 }
 
-// TODO(tbosch): remove when https://github.com/vsavkin/guinness/issues/41
-// is fixed
-class FixedSamePropsMatcher extends Matcher {
-  final Object _expected;
+class SpyObject extends gns.SpyObject {
+  final Map<String, SpyFunction> _spyFuncs = {};
 
-  const FixedSamePropsMatcher(this._expected);
+  SpyObject([arg]){}
 
-  bool matches(actual, Map matchState) {
-    return compare(toData(_expected), toData(actual));
-  }
+  SpyFunction spy(String funcName) =>
+    _spyFuncs.putIfAbsent(funcName, () => new SpyFunction(funcName));
 
-  Description describeMismatch(item, Description mismatchDescription,
-      Map matchState, bool verbose) =>
-      mismatchDescription.add('is equal to ${toData(item)}. Expected: ${toData(_expected)}');
+  static stub([object = null, config = null, overrides = null]) {
+    if (object is! SpyObject) {
+      overrides = config;
+      config = object;
+      object = new SpyObject();
+    }
 
-  Description describe(Description description) =>
-      description.add('has different properties');
-
-  toData(obj) => new _FixedObjToData().call(obj);
-  compare(d1, d2) => new DeepCollectionEquality().equals(d1, d2);
-}
-
-// TODO(tbosch): remove when https://github.com/vsavkin/guinness/issues/41
-// is fixed
-class _FixedObjToData {
-  final visitedObjects = new Set();
-
-  call(obj) {
-    if (visitedObjects.contains(obj)) return null;
-    visitedObjects.add(obj);
-
-    if (obj is num || obj is String || obj is bool) return obj;
-    if (obj is Iterable) return obj.map(call).toList();
-    if (obj is Map) return mapToData(obj);
-    return toDataUsingReflection(obj);
-  }
-
-  mapToData(obj) {
-    var res = {};
-    obj.forEach((k,v) {
-      res[call(k)] = call(v);
+    var m = StringMapWrapper.merge(config, overrides);
+    StringMapWrapper.forEach(m, (value, key){
+      object.spy(key).andReturn(value);
     });
-    return res;
-  }
-
-  toDataUsingReflection(obj) {
-    final clazz = reflectClass(obj.runtimeType);
-    final instance = reflect(obj);
-
-    return clazz.declarations.values.fold({}, (map, decl) {
-      if (decl is VariableMirror && !decl.isPrivate && !decl.isStatic) {
-        final field = instance.getField(decl.simpleName);
-        final name = MirrorSystem.getName(decl.simpleName);
-        map[name] = call(field.reflectee);
-      }
-      return map;
-    });
+    return object;
   }
 }
+
+
 
 String elementText(n) {
   hasNodes(n) {
@@ -154,11 +222,11 @@ String elementText(n) {
   }
 
   if (DOM.isElementNode(n) && DOM.tagName(n) == 'CONTENT') {
-    return elementText(n.getDistributedNodes());
+    return elementText(DOM.getDistributedNodes(n));
   }
 
   if (DOM.hasShadowRoot(n)) {
-    return elementText(DOM.childNodesAsList(n.shadowRoot));
+    return elementText(DOM.childNodesAsList(DOM.getShadowRoot(n)));
   }
 
   if (hasNodes(n)) {

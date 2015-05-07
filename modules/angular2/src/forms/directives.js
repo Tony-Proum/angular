@@ -1,83 +1,143 @@
-import {Template, Component, Decorator, NgElement, Ancestor, onChange} from 'angular2/core';
-import {Optional} from 'angular2/di';
-import {DOM} from 'angular2/src/dom/dom_adapter';
-import {isBlank, isPresent, isString, CONST} from 'angular2/src/facade/lang';
-import {StringMapWrapper, ListWrapper} from 'angular2/src/facade/collection';
-import {ControlGroup, Control} from './model';
-import * as validators from './validators';
+import {Directive, onChange} from 'angular2/src/core/annotations_impl/annotations';
+import {Ancestor} from 'angular2/src/core/annotations_impl/visibility';
+import {ElementRef} from 'angular2/src/core/compiler/element_ref';
+import {Optional} from 'angular2/src/di/annotations_impl';
+import {Renderer} from 'angular2/src/render/api';
+import {isPresent, isString} from 'angular2/src/facade/lang';
+import {ListWrapper} from 'angular2/src/facade/collection';
+import {ControlGroup} from './model';
+import {Validators} from './validators';
 
-@CONST()
-export class ControlValueAccessor {
-  readValue(el){}
-  writeValue(el, value):void {}
-}
+//export interface ControlValueAccessor {
+//  writeValue(value):void{}
+//  set onChange(fn){}
+//}
 
-@CONST()
-class DefaultControlValueAccessor extends ControlValueAccessor {
+/**
+ * The default accessor for writing a value and listening to changes that is used by a {@link Control} directive.
+ *
+ * This is the default strategy that Angular uses when no other accessor is applied.
+ *
+ *  # Example
+ *  ```
+ *  <input type="text" [control]="loginControl">
+ *  ```
+ *
+ * @exportedAs angular2/forms
+ */
+@Directive({
+  selector: '[control]',
+  hostListeners: {
+    'change' : 'onChange($event.target.value)',
+    'input' : 'onChange($event.target.value)'
+  },
+  hostProperties: {
+    'value' : 'value'
+  }
+})
+export class DefaultValueAccessor {
+  value;
+  onChange:Function;
+
   constructor() {
-    super();
+    this.onChange = (_) => {};
   }
 
-  readValue(el) {
-    return DOM.getValue(el);
-  }
-
-  writeValue(el, value):void {
-    DOM.setValue(el,value);
+  writeValue(value) {
+    this.value = value
   }
 }
 
-@CONST()
-class CheckboxControlValueAccessor extends ControlValueAccessor {
-  constructor() {
-    super();
+/**
+ * The accessor for writing a value and listening to changes on a checkbox input element.
+ *
+ *
+ *  # Example
+ *  ```
+ *  <input type="checkbox" [control]="rememberLogin">
+ *  ```
+ *
+ * @exportedAs angular2/forms
+ */
+@Directive({
+  selector: 'input[type=checkbox][control]',
+  hostListeners: {
+    'change' : 'onChange($event.target.checked)'
+  },
+  hostProperties: {
+    'checked' : 'checked'
+  }
+})
+export class CheckboxControlValueAccessor {
+  _elementRef:ElementRef;
+  _renderer:Renderer;
+
+  checked:boolean;
+  onChange:Function;
+
+  constructor(cd:ControlDirective, elementRef:ElementRef, renderer:Renderer) {
+    this.onChange = (_) => {};
+    this._elementRef = elementRef;
+    this._renderer = renderer;
+    cd.valueAccessor = this; //ControlDirective should inject CheckboxControlDirective
   }
 
-  readValue(el):boolean {
-    return DOM.getChecked(el);
-  }
-
-  writeValue(el, value:boolean):void {
-    DOM.setChecked(el, value);
+  writeValue(value) {
+    this._renderer.setElementProperty(this._elementRef.parentView.render, this._elementRef.boundElementIndex,
+      'checked', value)
   }
 }
 
-var controlValueAccessors = {
-  "checkbox" : new CheckboxControlValueAccessor(),
-  "text" : new DefaultControlValueAccessor()
-};
-
-function controlValueAccessorFor(controlType:string):ControlValueAccessor {
-  var accessor = StringMapWrapper.get(controlValueAccessors, controlType);
-  if (isPresent(accessor)) {
-    return accessor;
-  } else {
-    return StringMapWrapper.get(controlValueAccessors, "text");
-  }
-}
-
-@Decorator({
+/**
+ * Binds a control to a DOM element.
+ *
+ * # Example
+ *
+ * In this example, we bind the control to an input element. When the value of the input element changes, the value of
+ * the control will reflect that change. Likewise, if the value of the control changes, the input element reflects that
+ * change.
+ *
+ * Here we use {@link FormDirectives}, rather than importing each form directive individually, e.g.
+ * `ControlDirective`, `ControlGroupDirective`. This is just a shorthand for the same end result.
+ *
+ *  ```
+ * @Component({selector: "login-comp"})
+ * @View({
+ *      directives: [FormDirectives],
+ *      inline: "<input type='text' [control]='loginControl'>"
+ *      })
+ * class LoginComp {
+ *  loginControl:Control;
+ *
+ *  constructor() {
+ *    this.loginControl = new Control('');
+ *  }
+ * }
+ *
+ *  ```
+ *
+ * @exportedAs angular2/forms
+ */
+@Directive({
   lifecycle: [onChange],
   selector: '[control]',
-  bind: {
-    'controlName' : 'control',
-    'type' : 'type'
+  properties: {
+    'controlOrName' : 'control'
   }
 })
 export class ControlDirective {
   _groupDirective:ControlGroupDirective;
-  _el:NgElement;
 
-  controlName:string;
-  type:string;
-  valueAccessor:ControlValueAccessor;
+  controlOrName:any;
+  valueAccessor:any; //ControlValueAccessor
 
   validator:Function;
 
-  constructor(@Ancestor() groupDirective:ControlGroupDirective, el:NgElement)  {
+  constructor(@Optional() @Ancestor() groupDirective:ControlGroupDirective, valueAccessor:DefaultValueAccessor)  {
     this._groupDirective = groupDirective;
-    this._el = el;
-    this.validator = validators.nullValidator;
+    this.controlOrName = null;
+    this.valueAccessor = valueAccessor;
+    this.validator = Validators.nullValidator;
   }
 
   // TODO: vsavkin this should be moved into the constructor once static bindings
@@ -87,35 +147,77 @@ export class ControlDirective {
   }
 
   _initialize() {
-    this._groupDirective.addDirective(this);
-
-    var c = this._control();
-    c.validator = validators.compose([c.validator, this.validator]);
-
-    if (isBlank(this.valueAccessor)) {
-      this.valueAccessor = controlValueAccessorFor(this.type);
+    if(isPresent(this._groupDirective)) {
+      this._groupDirective.addDirective(this);
     }
 
+    var c = this._control();
+    c.validator = Validators.compose([c.validator, this.validator]);
+
     this._updateDomValue();
-    DOM.on(this._el.domElement, "change", (_) => this._updateControlValue());
+    this._setUpUpdateControlValue();
   }
 
   _updateDomValue() {
-    this.valueAccessor.writeValue(this._el.domElement, this._control().value);
+    this.valueAccessor.writeValue(this._control().value);
   }
 
-  _updateControlValue() {
-    this._control().updateValue(this.valueAccessor.readValue(this._el.domElement));
+  _setUpUpdateControlValue() {
+    this.valueAccessor.onChange = (newValue) => this._control().updateValue(newValue);
   }
 
   _control() {
-    return this._groupDirective.findControl(this.controlName);
+    if (isString(this.controlOrName)) {
+      return this._groupDirective.findControl(this.controlOrName);
+    } else {
+      return this.controlOrName;
+    }
   }
 }
 
-@Decorator({
+/**
+ * Binds a control group to a DOM element.
+ *
+ * # Example
+ *
+ * In this example, we bind the control group to the form element, and we bind the login and password controls to the
+ * login and password elements.
+ *
+ * Here we use {@link FormDirectives}, rather than importing each form directive individually, e.g.
+ * `ControlDirective`, `ControlGroupDirective`. This is just a shorthand for the same end result.
+ *
+ *  ```
+ * @Component({selector: "login-comp"})
+ * @View({
+ *      directives: [FormDirectives],
+ *      inline: "<form [control-group]='loginForm'>" +
+ *              "Login <input type='text' control='login'>" +
+ *              "Password <input type='password' control='password'>" +
+ *              "<button (click)="onLogin()">Login</button>" +
+ *              "</form>"
+ *      })
+ * class LoginComp {
+ *  loginForm:ControlGroup;
+ *
+ *  constructor() {
+ *    this.loginForm = new ControlGroup({
+ *      login: new Control(""),
+ *      password: new Control("")
+ *    });
+ *  }
+ *
+ *  onLogin() {
+ *    // this.loginForm.value
+ *  }
+ * }
+ *
+ *  ```
+ *
+ * @exportedAs angular2/forms
+ */
+@Directive({
   selector: '[control-group]',
-  bind: {
+  properties: {
     'controlGroup' : 'control-group'
   }
 })
@@ -127,7 +229,6 @@ export class ControlGroupDirective {
   _directives:List<ControlDirective>;
 
   constructor(@Optional() @Ancestor() groupDirective:ControlGroupDirective) {
-    super();
     this._groupDirective = groupDirective;
     this._directives = ListWrapper.create();
   }
@@ -162,6 +263,15 @@ export class ControlGroupDirective {
   }
 }
 
-export var FormDirectives = [
-  ControlGroupDirective, ControlDirective
+/**
+ *
+ * A list of all the form directives used as part of a `@View` annotation.
+ *
+ *  This is a shorthand for importing them each individually.
+ *
+ * @exportedAs angular2/forms
+ */
+// todo(misko): rename to lover case as it is not a Type but a var.
+export var FormDirectives:List = [
+  ControlGroupDirective, ControlDirective, CheckboxControlValueAccessor, DefaultValueAccessor
 ];
