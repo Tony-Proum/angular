@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -ex
 
 echo =============================================================================
 # go to project dir
@@ -28,3 +28,5 @@ fi
 
 ./node_modules/.bin/protractor protractor-js.conf.js $OPTIONS
 ./node_modules/.bin/protractor protractor-js.conf.js $OPTIONS --benchmark --dryrun
+./node_modules/.bin/protractor dist/js/cjs/benchpress/test/firefox_extension/conf.js
+

@@ -1,5 +1,3 @@
-// load traceur runtime as our tests are written in es6
-require('traceur/bin/traceur-runtime.js');
 var fs = require('fs-extra');
 
 var argv = require('yargs')
@@ -40,7 +38,7 @@ var browsers = argv['browsers'].split(',');
 var CHROME_OPTIONS = {
   'args': ['--js-flags=--expose-gc'],
   'perfLoggingPrefs': {
-    'traceCategories': 'v8,blink.console,disabled-by-default-devtools.timeline'
+    'traceCategories': 'v8,blink.console,devtools.timeline,disabled-by-default-devtools.timeline'
   }
 };
 
@@ -61,7 +59,7 @@ var BROWSER_CAPS = {
     browserName: 'chrome',
     chromeOptions: mergeInto(CHROME_OPTIONS, {
       'mobileEmulation': CHROME_MOBILE_EMULATION,
-      'binary': process.env.DARTIUM
+      'binary': process.env.DARTIUM_BIN
     }),
     loggingPrefs: {
       performance: 'ALL',
@@ -71,8 +69,22 @@ var BROWSER_CAPS = {
   ChromeDesktop: {
     browserName: 'chrome',
     chromeOptions: mergeInto(CHROME_OPTIONS, {
-      'mobileEmulation': CHROME_MOBILE_EMULATION
+      // TODO(tbosch): when we are using mobile emulation on
+      // chrome 44.0 beta, clicks are no more working.
+      // see https://github.com/angular/angular/issues/2309
+      // 'mobileEmulation': CHROME_MOBILE_EMULATION
     }),
+    loggingPrefs: {
+      performance: 'ALL',
+      browser: 'ALL'
+    }
+  },
+  ChromeOnTravis: {
+    browserName: 'chrome',
+    chromeOptions: mergeInto({
+      'args': ['--no-sandbox', '--js-flags=--expose-gc'],
+      'binary': process.env.CHROME_BIN
+    }, CHROME_OPTIONS),
     loggingPrefs: {
       performance: 'ALL',
       browser: 'ALL'
@@ -131,7 +143,7 @@ var config = exports.config = {
     // TODO(juliemr): remove this hack and use the config option
     // restartBrowserBetweenTests once that is not hanging.
     // See https://github.com/angular/protractor/issues/1983
-    patchProtractorWait(browser);
+    //
     // During benchmarking, we need to open a new browser
     // for every benchmark, otherwise the numbers can get skewed
     // from other benchmarks (e.g. Chrome keeps JIT caches, ...)
@@ -140,7 +152,6 @@ var config = exports.config = {
       var _tmpBrowser;
       beforeEach(function() {
         global.browser = originalBrowser.forkNewDriverInstance();
-        patchProtractorWait(global.browser);
         global.element = global.browser.element;
         global.$ = global.browser.$;
         global.$$ = global.browser.$$;
@@ -169,6 +180,8 @@ var config = exports.config = {
 
   framework: 'jasmine2',
 
+  useAllAngular2AppRoots: true,
+
   jasmineNodeOpts: {
     showColors: true,
     defaultTimeoutInterval: argv['benchmark'] ? 1200000 : 60000
@@ -182,23 +195,12 @@ var config = exports.config = {
   }
 };
 
-// Disable waiting for Angular as we don't have an integration layer yet...
-// TODO(tbosch): Implement a proper debugging API for Ng2.0, remove this here
-// and the sleeps in all tests.
-function patchProtractorWait(browser) {
-  browser.ignoreSynchronization = true;
-  var _get = browser.get;
-  var sleepInterval = process.env.TRAVIS || process.env.JENKINS_URL ? 7000 : 3000;
-  browser.get = function() {
-    var result = _get.apply(this, arguments);
-    browser.sleep(sleepInterval);
-    return result;
-  }
-}
-
 exports.createBenchpressRunner = function(options) {
+  // benchpress will also load traceur runtime as our tests are written in es6
+  var benchpress = require('./dist/build/benchpress_bundle');
+  global.benchpress = benchpress;
+
   var nodeUuid = require('node-uuid');
-  var benchpress = require('./dist/js/cjs/benchpress/benchpress');
 
   // TODO(tbosch): add cloud reporter again (only when !options.test)
   // var cloudReporterConfig;
@@ -221,11 +223,9 @@ exports.createBenchpressRunner = function(options) {
   var bindings = [
     benchpress.SeleniumWebDriverAdapter.PROTRACTOR_BINDINGS,
     benchpress.bind(benchpress.Options.FORCE_GC).toValue(argv['force-gc']),
-    benchpress.bind(benchpress.Options.DEFAULT_DESCRIPTION).toValue({
-      'lang': options.lang,
-      'runId': runId
-    }),
-    benchpress.JsonFileReporter.BINDINGS,
+    benchpress.bind(benchpress.Options.DEFAULT_DESCRIPTION)
+        .toValue({'lang': options.lang, 'runId': runId}),
+    benchpress.JsonFileReporter.PROVIDERS,
     benchpress.bind(benchpress.JsonFileReporter.PATH).toValue(resultsFolder)
   ];
   if (!argv['dryrun']) {

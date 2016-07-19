@@ -66,11 +66,14 @@ if [[ -z $ENV_SET ]]; then
     fi
   fi
 
+  export DART_SDK_LIB_SEARCH_PATH="$DART_SDK"
   export DART_SDK
   export DARTSDK
   export DART
   export PUB=${PUB:-"$DART_SDK/bin/pub"}
-  export PUB_CACHE=$DART_SDK/pub-cache
+  if [ -z "$PUB_CACHE" ]; then
+    export PUB_CACHE=$DART_SDK/pub-cache
+  fi
   export DARTANALYZER=${DARTANALYZER:-"$DART_SDK/bin/dartanalyzer"}
   export DARTDOC=${DARTDOC:-"$DART_SDK/bin/dartdoc"}
   export DART_DOCGEN=${DART_DOCGEN:-"$DART_SDK/bin/docgen"}
@@ -83,6 +86,7 @@ if [[ -z $ENV_SET ]]; then
   echo '** ENV **'
   echo '*********'
   echo DART_SDK=$DART_SDK
+  echo DART_SDK_LIB_SEARCH_PATH=$DART_SDK_LIB_SEARCH_PATH
   echo DART=$DART
   echo PUB=$PUB
   echo DARTANALYZER=$DARTANALYZER
@@ -93,6 +97,5 @@ if [[ -z $ENV_SET ]]; then
   echo PATH=$PATH
   echo NGDART_BASE_DIR=$NGDART_BASE_DIR
   echo NGDART_SCRIPT_DIR=$NGDART_SCRIPT_DIR
-  $DART --version 2>&1
 
 fi

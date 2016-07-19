@@ -3,7 +3,7 @@ library scroll_app;
 import 'dart:async';
 import 'dart:html';
 import 'package:angular/angular.dart';
-import 'package:angular2/src/test_lib/benchmark_util.dart';
+import 'package:angular2/src/testing/benchmark_util.dart';
 
 @Component(
     selector: 'scroll-app',
@@ -29,7 +29,7 @@ class App implements ShadowRootAware {
     int appSize = getIntParameter('appSize');
     iterationCount = getIntParameter('iterationCount');
     scrollIncrement = getIntParameter('scrollIncrement');
-    appSize = appSize > 1 ? appSize - 1 : 0;  // draw at least one table
+    appSize = appSize > 1 ? appSize - 1 : 0; // draw at least one table
     scrollAreas = new List.generate(appSize, (i) => i);
   }
 

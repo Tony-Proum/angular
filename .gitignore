@@ -4,6 +4,7 @@
 packages
 pubspec.lock
 .pub
+.packages
 
 /dist/
 .buildlog
@@ -20,15 +21,15 @@ tmp
 *.js.deps
 *.js.map
 
-# Or type definitions we mirror from github
-**/typings/**/*.d.ts
-**/typings/tsd.cached.json
-
 # Include when developing application packages.
 pubspec.lock
 .c9
 .idea/
+.settings/
 *.swo
+modules/.settings
+.vscode
+modules/.vscode
 
 # Don't check in secret files
 *secret.js
@@ -37,3 +38,12 @@ pubspec.lock
 npm-debug.log
 
 /docs/bower_components/
+
+# build-analytics
+.build-analytics
+
+# built dart payload tests
+/modules_dart/payload/**/build
+
+# rollup-test output
+/modules/rollup-test/dist/

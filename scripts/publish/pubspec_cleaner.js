@@ -24,7 +24,12 @@ var BASE_PACKAGE_JSON = require('../../package.json');
 doc['version'] = BASE_PACKAGE_JSON.version;
 doc['homepage'] = BASE_PACKAGE_JSON.homepage;
 doc['authors'] = Object.keys(BASE_PACKAGE_JSON.contributors).map(function(name) {
-  return name + ' <' + BASE_PACKAGE_JSON.contributors[name] + '>';
+  return BASE_PACKAGE_JSON.contributors[name];
 });
+
+if (doc['dependencies'] && doc['dependencies']['angular2']) {
+  delete doc['dependencies']['angular2'];
+  doc['dependencies']['angular2'] = BASE_PACKAGE_JSON.version;
+}
 
 fs.writeFileSync(pubspecFile, yaml.safeDump(doc));

@@ -1,5 +1,5 @@
-/// <reference path="../typings/node/node.d.ts" />
-/// <reference path="../typings/fs-extra/fs-extra.d.ts" />
+/// <reference path="./broccoli-writer.d.ts" />
+
 import Writer = require('broccoli-writer');
 import fs = require('fs');
 import fsx = require('fs-extra');
@@ -9,11 +9,11 @@ var glob = require('glob');
 
 export interface MultiCopyOptions {
   /** The path of the file to copy. */
-  srcPath: string,
+  srcPath: string;
   /** A list of glob patterns of folders to copy to, matched against the input tree. */
-  targetPatterns: string[],
+  targetPatterns: string[];
   /** List of glob patterns to *not* copy to, matched against the matches from `targetPatterns`. */
-  exclude?: string[],
+  exclude?: string[];
 }
 
 /**
@@ -21,27 +21,26 @@ export interface MultiCopyOptions {
  * given by glob patterns, .
  */
 export class MultiCopy extends Writer {
-  constructor(private inputTree, private options: MultiCopyOptions) { super(); }
+  constructor(private inputTree: BroccoliTree, private options: MultiCopyOptions) { super(); }
 
-  write(readTree: (tree) => Promise<string>, destDir: string): Promise<any> {
-    return readTree(this.inputTree)
-        .then((inputPath: string) => {
-          var fileName = path.basename(this.options.srcPath);
-          var data = fs.readFileSync(path.join(inputPath, this.options.srcPath), 'utf-8');
+  write(readTree: (tree: BroccoliTree) => Promise<string>, destDir: string): Promise<any> {
+    return readTree(this.inputTree).then((inputPath: string) => {
+      var fileName = path.basename(this.options.srcPath);
+      var data = fs.readFileSync(path.join(inputPath, this.options.srcPath), 'utf-8');
 
-          this.options.targetPatterns.forEach(pattern => {
-            var paths: string[] = glob.sync(pattern);
-            paths = paths.filter(p => fs.statSync(p).isDirectory());
-            if (this.options.exclude) {
-              paths = paths.filter(p => !this.options.exclude.some((excl) => minimatch(p, excl)));
-            }
-            paths.forEach(p => {
-              var folder = path.join(destDir, p);
-              fsx.mkdirsSync(folder);
-              var outputPath = path.join(folder, fileName);
-              fs.writeFileSync(outputPath, data);
-            });
-          });
+      this.options.targetPatterns.forEach(pattern => {
+        var paths: string[] = glob.sync(pattern);
+        paths = paths.filter(p => fs.statSync(p).isDirectory());
+        if (this.options.exclude) {
+          paths = paths.filter(p => !this.options.exclude.some((excl) => minimatch(p, excl)));
+        }
+        paths.forEach(p => {
+          var folder = path.join(destDir, p);
+          fsx.mkdirsSync(folder);
+          var outputPath = path.join(folder, fileName);
+          fs.writeFileSync(outputPath, data);
         });
+      });
+    });
   }
 }

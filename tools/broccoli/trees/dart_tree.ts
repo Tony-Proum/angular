@@ -1,37 +1,57 @@
-/// <reference path="../../typings/node/node.d.ts" />
 'use strict';
 
 import {MultiCopy} from './../multi_copy';
 import destCopy from '../broccoli-dest-copy';
 var Funnel = require('broccoli-funnel');
-var glob = require('glob');
-var mergeTrees = require('broccoli-merge-trees');
+import mergeTrees from '../broccoli-merge-trees';
 var path = require('path');
-var renderLodashTemplate = require('broccoli-lodash');
-var replace = require('broccoli-replace');
+import renderLodashTemplate from '../broccoli-lodash';
 var stew = require('broccoli-stew');
-var ts2dart = require('../broccoli-ts2dart');
+import ts2dart from '../broccoli-ts2dart';
+import dartfmt from '../broccoli-dartfmt';
+import replace from '../broccoli-replace';
+import {AngularBuilderOptions} from '../angular_builder';
+import generateForTest from '../broccoli-generate-for-test';
+
+var global_excludes = [
+  'angular2/examples/**/ts/**/*',
+  'angular2/http*',
+  'angular2/http/**/*',
+  'angular2/src/http/**/*',
+  'angular2/src/upgrade/**/*',
+  'angular2/test/http/**/*',
+  'angular2/test/upgrade/**/*',
+  'angular2/upgrade*',
+  'payload_tests/**/ts/**/*',
+  'playground/src/http/**/*',
+  'playground/src/jsonp/**/*',
+  'playground/test/http/**/*',
+  'playground/test/jsonp/**/*',
+];
+
 
 /**
  * A funnel starting at modules, including the given filters, and moving into the root.
  * @param include Include glob filters.
  */
 function modulesFunnel(include: string[], exclude?: string[]) {
+  exclude = exclude || [];
+  exclude = exclude.concat(global_excludes);
   return new Funnel('modules', {include, destDir: '/', exclude});
 }
 
 /**
  * Replaces $SCRIPT$ in .html files with actual <script> tags.
  */
-function replaceScriptTagInHtml(content: string, relativePath: string): string {
+function replaceScriptTagInHtml(placeholder: string, relativePath: string): string {
   var scriptTags = '';
   if (relativePath.match(/^benchmarks/)) {
     scriptTags += '<script src="url_params_to_form.js" type="text/javascript"></script>\n';
   }
-  var scriptName = relativePath.replace(/.*\/([^/]+)\.html$/, '$1.dart');
+  var scriptName = relativePath.replace(/\\/g, '/').replace(/.*\/([^/]+)\.html$/, '$1.dart');
   scriptTags += '<script src="' + scriptName + '" type="application/dart"></script>\n' +
-                '<script src="packages/browser/dart.js" type="text/javascript"></script>';
-  return content.replace('$SCRIPTS$', scriptTags);
+      '<script src="packages/browser/dart.js" type="text/javascript"></script>';
+  return scriptTags;
 }
 
 function stripModulePrefix(relativePath: string): string {
@@ -41,28 +61,62 @@ function stripModulePrefix(relativePath: string): string {
   return relativePath.replace(/^modules\//, '');
 }
 
-function getSourceTree() {
-  // Transpile everything in 'modules' except for rtts_assertions.
-  var tsInputTree = modulesFunnel(['**/*.js', '**/*.ts', '**/*.dart'], ['rtts_assert/**/*']);
-  var transpiled = ts2dart.transpile(tsInputTree);
+function getSourceTree(options: AngularBuilderOptions) {
+  var tsInputTree = modulesFunnel(
+      [
+        'tsconfig-ts2dart.json',
+        'upgrade-ts2dart.d.ts',
+        'zone-ts2dart.d.ts',
+        '**/*.js',
+        '**/*.ts',
+        '**/*.dart',
+      ],
+      [
+        'rollup-test/**/*',
+        'angular1_router/**/*',
+        'angular2/upgrade/**/*',
+        'angular2/core/test/typings.d.ts',
+        'angular2/manual_typings/globals.d.ts',
+        'angular2/typings/es6-collections/es6-collections.d.ts',
+        'angular2/typings/es6-promise/es6-promise.d.ts',
+        'angular2/typings/tsd.d.ts',
+        'angular2/typings.d.ts',
+      ]);
+  var transpiled = ts2dart(tsInputTree, {
+    generateLibraryName: true,
+    generateSourceMap: false,
+    translateBuiltins: true,
+    tsconfig: 'tsconfig-ts2dart.json'
+  });
+
   // Native sources, dart only examples, etc.
-  var dartSrcs = modulesFunnel(['**/*.dart']);
-  return mergeTrees([transpiled, dartSrcs]);
+  var dartSrcs = modulesFunnel(
+      ['**/*.dart', '**/*.ng_meta.json', '**/*.aliases.json', '**/css/**', '**/*.css']);
+
+  var compiledTree = mergeTrees([transpiled, dartSrcs]);
+
+  // Generate test files
+  let generatedDartTestFiles = generateForTest(
+      mergeTrees([compiledTree, new Funnel('packages', {include: ['path/**', 'stack_trace/**']})]),
+      {files: ['*/test/**/*_codegen_typed.dart'], dartPath: options.dartSDK.VM});
+
+  return mergeTrees([compiledTree, generatedDartTestFiles], {overwrite: true});
 }
 
-function fixDartFolderLayout(sourceTree) {
+function fixDartFolderLayout(sourceTree: BroccoliTree) {
   // Move around files to match Dart's layout expectations.
-  return stew.rename(sourceTree, function(relativePath) {
+  return stew.rename(sourceTree, function(relativePath: string) {
     // If a file matches the `pattern`, insert the given `insertion` as the second path part.
     var replacements = [
       {pattern: /^benchmarks\/test\//, insertion: ''},
       {pattern: /^benchmarks\//, insertion: 'web'},
       {pattern: /^benchmarks_external\/test\//, insertion: ''},
       {pattern: /^benchmarks_external\//, insertion: 'web'},
-      {pattern: /^examples\/test\//, insertion: ''},
-      {pattern: /^examples\//, insertion: 'web/'},
+      {pattern: /^playground\/test\//, insertion: ''},
+      {pattern: /^playground\//, insertion: 'web/'},
       {pattern: /^[^\/]*\/test\//, insertion: ''},
-      {pattern: /^./, insertion: 'lib'},  // catch all.
+      // catch all.
+      {pattern: /^./, insertion: 'lib'},
     ];
 
     for (var i = 0; i < replacements.length; i++) {
@@ -79,14 +133,23 @@ function fixDartFolderLayout(sourceTree) {
 
 function getHtmlSourcesTree() {
   // Replace $SCRIPT$ markers in HTML files.
-  var htmlSrcsTree = stew.map(modulesFunnel(['*/src/**/*.html']), replaceScriptTagInHtml);
+  var htmlSrcsTree = modulesFunnel(['*/src/**/*.html']);
+  htmlSrcsTree = replace(
+      htmlSrcsTree,
+      {files: ['*/**'], patterns: [{match: '$SCRIPTS$', replacement: replaceScriptTagInHtml}]});
+
   // Copy a url_params_to_form.js for each benchmark html file.
-  var urlParamsToFormTree = new MultiCopy('', {
+  var urlParamsToFormTree = new MultiCopy(<any>'', {
     srcPath: 'tools/build/snippets/url_params_to_form.js',
     targetPatterns: ['modules/benchmarks*/src/*', 'modules/benchmarks*/src/*/*'],
   });
   urlParamsToFormTree = stew.rename(urlParamsToFormTree, stripModulePrefix);
   return mergeTrees([htmlSrcsTree, urlParamsToFormTree]);
+}
+
+function getExamplesJsonTree() {
+  // Copy JSON files
+  return modulesFunnel(['playground/**/*.json']);
 }
 
 
@@ -100,54 +163,51 @@ function getTemplatedPubspecsTree() {
     license: BASE_PACKAGE_JSON.license,
     contributors: BASE_PACKAGE_JSON.contributors,
     dependencies: BASE_PACKAGE_JSON.dependencies,
-    devDependencies: {
-      "yargs": BASE_PACKAGE_JSON.devDependencies['yargs'],
-      "gulp-sourcemaps": BASE_PACKAGE_JSON.devDependencies['gulp-sourcemaps'],
-      "gulp-traceur": BASE_PACKAGE_JSON.devDependencies['gulp-traceur'],
-      "gulp": BASE_PACKAGE_JSON.devDependencies['gulp'],
-      "gulp-rename": BASE_PACKAGE_JSON.devDependencies['gulp-rename'],
-      "through2": BASE_PACKAGE_JSON.devDependencies['through2']
-    }
+    devDependencies: {}
   };
   // Generate pubspec.yaml from templates.
-  // Lodash insists on dropping one level of extension, so first artificially rename the yaml
-  // files to .yaml.template.
-  var pubspecs = stew.rename(modulesFunnel(['**/pubspec.yaml']), '.yaml', '.yaml.template');
+  var pubspecs = modulesFunnel(['**/pubspec.yaml']);
   // Then render the templates.
-  return renderLodashTemplate(
-      pubspecs,
-      {files: ['**/pubspec.yaml.template'], context: {'packageJson': COMMON_PACKAGE_JSON}});
+  return renderLodashTemplate(pubspecs, {context: {'packageJson': COMMON_PACKAGE_JSON}});
 }
 
 function getDocsTree() {
   // LICENSE files
-  var licenses = new MultiCopy('', {
+  var licenses = new MultiCopy(<any>'', {
     srcPath: 'LICENSE',
     targetPatterns: ['modules/*'],
-    exclude: ['*/rtts_assert'],  // Not in dart.
+    exclude: [
+      '*/@angular',
+      '*/angular2',
+      '*/angular1_router',
+      '*/angular2/src/http',
+      '*/payload_tests',
+      '*/upgrade',
+    ]  // Not in dart.
   });
   licenses = stew.rename(licenses, stripModulePrefix);
 
   // Documentation.
   // Rename *.dart.md -> *.dart.
-  var mdTree = stew.rename(modulesFunnel(['**/*.dart.md']),
-                           relativePath => relativePath.replace(/\.dart\.md$/, '.md'));
+  var mdTree = stew.rename(
+      modulesFunnel(['**/*.dart.md']),
+      (relativePath: string) => relativePath.replace(/\.dart\.md$/, '.md'));
   // Copy all assets, ignore .js. and .dart. (handled above).
-  var docs = modulesFunnel(['**/*.md', '**/*.png', '**/*.html', '**/*.css', '**/*.scss'],
-                           ['**/*.js.md', '**/*.dart.md']);
-  return mergeTrees([licenses, mdTree, docs]);
+  var docs = modulesFunnel(
+      ['**/*.md', '**/*.png', '**/*.html', '**/*.css', '**/*.scss'],
+      ['**/*.js.md', '**/*.dart.md', 'angular1_router/**/*']);
+
+  var assets = modulesFunnel(['playground/**/*.json']);
+
+  return mergeTrees([licenses, mdTree, docs, assets]);
 }
 
-module.exports = function makeDartTree(destinationPath) {
-  var sourceTree = mergeTrees([getSourceTree(), getHtmlSourcesTree()]);
+module.exports = function makeDartTree(options: AngularBuilderOptions) {
+  var dartSources = dartfmt(getSourceTree(options), {dartSDK: options.dartSDK, logs: options.logs});
+  var sourceTree = mergeTrees([dartSources, getHtmlSourcesTree(), getExamplesJsonTree()]);
   sourceTree = fixDartFolderLayout(sourceTree);
 
   var dartTree = mergeTrees([sourceTree, getTemplatedPubspecsTree(), getDocsTree()]);
 
-  // TODO(iminar): tree differ seems to have issues with trees created by mergeTrees, investigate!
-  //   ENOENT error is thrown while doing fs.readdirSync on inputRoot
-  //   in the meantime, we just do noop mv to create a new tree
-  dartTree = stew.mv(dartTree, '');
-
-  return destCopy(dartTree, destinationPath);
+  return destCopy(dartTree, options.outputPath);
 };

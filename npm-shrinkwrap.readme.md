@@ -3,57 +3,49 @@ All of our npm dependencies are locked via the `npm-shrinkwrap.json` file for th
 - our project has lots of dependencies which update at unpredictable times, so it's important that
   we update them explicitly once in a while rather than implicitly when any of us runs npm install
 - locked dependencies allow us to do reuse npm cache on travis, significantly speeding up our builds
-  (by 5min or more)  
+  (by 5 minutes or more)
 - locked dependencies allow us to detect when node_modules folder is out of date after a branch switch
   which allows us to build the project with the correct dependencies every time
 
-However npm's shrinkwrap is known to be buggy, so we need to take some extra steps to deal with this.
-The most important step is generating the npm-shrinkwrap.clean.js which is used during code reviews
-or debugging to easily review what has actually changed. 
-See https://github.com/npm/npm/issues/3581 for related npm issue.
+We also generate `npm-shrinkwrap.clean.js` file which is used during code reviews or debugging to easily review what has actually changed without extra noise.
 
 To add a new dependency do the following:
 
-1. add a new dependency via `npm install -D <packagename>`
-2. update npm-shrinkwrap.json with `npm shrinkwrap --dev`
-3. run `./tools/npm/clean-shrinkwrap.js`
-4. these steps should change 3 files: `package.json`, `npm-shrinkwrap.json` and `npm-shrinkwrap.clean.json`
-5. commit changes to these three files and you are done
+1. if you are on linux or windows, then use MacOS or ask someone with MacOS to perform the 
+   installation. This is due to an optional `fsevents` dependency that is really required on MacOS 
+   to get good performance from file watching.
+2. make sure you are in sync with `upstream/master`
+3. ensure that your `node_modules` directory is not stale by running `npm install`
+4. add a new dependency via `npm install --save-dev <packagename>`
+5. run `./tools/npm/reshrinkwrap`
+6. these steps should change 3 files: `package.json`, `npm-shrinkwrap.json` and `npm-shrinkwrap.clean.json`
+7. commit changes to these three files and you are done
 
 
 To update existing dependency do the following:
 
-1. update `package.json`
-2. run `npm install <packagename>`
-3. relock the dependencies with `npm shrinkwrap --dev`
-4. clean up the shrinkwrap file for review with `./tools/npm/clean-shrinkwrap.js`
-5. these steps should change 3 files: `package.json`, `npm-shrinkwrap.json` and `npm-shrinkwrap.clean.json`
-6. commit changes to these three files and you are done
+1. if you are on linux or windows, then use MacOS or ask someone with MacOS to perform the 
+   installation. This is due to an optional `fsevents` dependency that is really required on MacOS 
+   to get good performance from file watching.
+2. make sure you are in sync with `upstream/master`: `git fetch upstream && git rebase upstream/master`
+3. ensure that your `node_modules` directory is not stale by running `npm install`
+4. run `npm install --save-dev <packagename>@<version|latest>` or `npm update <packagename>` to 
+   update to the latest version that matches version constraint in `package.json`
+5. run `./tools/npm/reshrinkwrap`
+6. these steps should change 2 files: `npm-shrinkwrap.json` and `npm-shrinkwrap.clean.json`.
+   Optionally if you used `npm install ...` in the first step, `package.json` might be modified as 
+   well.
+7. commit changes to these three files and you are done
 
 
-If updating the `tsd` project a special steps need to be taken due to
-https://github.com/Bartvds/minitable/issues/2:
+To Remove an existing dependency do the following:
 
-Update `tsd` by following the steps above but before you run `npm shrinkwrap --dev`, you'll have to
-manually patch `node_modules/tsd/node_modules/minitable/package.json` and remove the `minichain` from
-the `peerDependencies` section.
-
-before:
-
-```
- "peerDependencies": {
-    "minichain": "~X.Y.Z",
-    ...
-  },
-```
-
-
-after:
-
-```
- "peerDependencies": {
-    ...
-  },
-```
-
-Then resume the shrinkwrap update and cleaning steps.
+1. if you are on linux or windows, then use MacOS or ask someone with MacOS to perform the 
+   installation. This is due to an optional `fsevents` dependency that is really required on MacOS 
+   to get good performance from file watching.
+2. make sure you are in sync with `upstream/master`: `git fetch upstream && git rebase upstream/master`
+3. ensure that your `node_modules` directory is not stale by running `npm install`
+4. run `npm uninstall --save-dev <packagename>@<version|latest>`
+5. run `./tools/npm/reshrinkwrap`
+6. these steps should change 3 files: `npm-shrinkwrap.json` and `npm-shrinkwrap.clean.json`.
+7. commit changes to these three files and you are done
